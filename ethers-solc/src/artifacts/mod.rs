@@ -24,6 +24,7 @@ use serde::{de::Visitor, Deserialize, Deserializer, Serialize, Serializer};
 
 pub mod output_selection;
 pub mod serde_helpers;
+use crate::artifacts::output_selection::ContractOutputSelection;
 pub use serde_helpers::{deserialize_bytes, deserialize_opt_bytes};
 
 /// Solidity files are made up of multiple `source units`, a solidity contract is such a `source
@@ -227,6 +228,25 @@ impl Settings {
                 ],
             )]),
         )])
+    }
+
+    /// Inserts a set of `ContractOutputSelection`
+    pub fn push_all(&mut self, settings: impl IntoIterator<Item = ContractOutputSelection>) {
+        for value in settings {
+            self.push_output_selection(value)
+        }
+    }
+
+    /// Inserts a set of `ContractOutputSelection`
+    #[must_use]
+    pub fn with_extra_output(
+        mut self,
+        settings: impl IntoIterator<Item = ContractOutputSelection>,
+    ) -> Self {
+        for value in settings {
+            self.push_output_selection(value)
+        }
+        self
     }
 
     /// Inserts the value for all files and contracts
@@ -823,7 +843,7 @@ impl OutputContracts {
 pub struct Contract {
     /// The Ethereum Contract Metadata.
     /// See https://docs.soliditylang.org/en/develop/metadata.html
-    pub abi: Option<Abi>,
+    pub abi: Option<LosslessAbi>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -846,6 +866,48 @@ pub struct Contract {
     pub ewasm: Option<Ewasm>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ir_optimized: Option<String>,
+}
+
+/// A helper type that ensures lossless (de)serialisation unlike [`ethabi::Contract`] which omits
+/// some information of (nested) components in a serde roundtrip. This is a problem for
+/// abienconderv2 structs because `ethabi::Contract`'s representation of those are [`ethabi::Param`]
+/// and the `kind` field of type [`ethabi::ParamType`] does not support deeply nested components as
+/// it's the case for structs. This is not easily fixable in ethabi as it would require a redesign
+/// of the overall `Param` and `ParamType` types. Instead, this type keeps a copy of the
+/// [`serde_json::Value`] when deserialized from the `solc` json compiler output and uses it to
+/// serialize the `abi` without loss.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct LosslessAbi {
+    /// The complete abi as json value
+    pub abi_value: serde_json::Value,
+    /// The deserialised version of `abi_value`
+    pub abi: Abi,
+}
+
+impl From<LosslessAbi> for Abi {
+    fn from(abi: LosslessAbi) -> Self {
+        abi.abi
+    }
+}
+
+impl Serialize for LosslessAbi {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.abi_value.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for LosslessAbi {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let abi_value = serde_json::Value::deserialize(deserializer)?;
+        let abi = serde_json::from_value(abi_value.clone()).map_err(serde::de::Error::custom)?;
+        Ok(Self { abi_value, abi })
+    }
 }
 
 /// Minimal representation of a contract with a present abi and bytecode.
@@ -913,7 +975,7 @@ impl From<Contract> for ContractBytecode {
             (None, None)
         };
 
-        Self { abi: c.abi, bytecode, deployed_bytecode }
+        Self { abi: c.abi.map(Into::into), bytecode, deployed_bytecode }
     }
 }
 
@@ -922,6 +984,7 @@ impl From<Contract> for ContractBytecode {
 /// Unlike `CompactContractSome` which contains the `BytecodeObject`, this holds the whole
 /// `Bytecode` object.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct CompactContractBytecode {
     /// The Ethereum Contract ABI. If empty, it is represented as an empty
     /// array. See https://docs.soliditylang.org/en/develop/abi-spec.html
@@ -952,18 +1015,13 @@ impl CompactContractBytecode {
 impl From<Contract> for CompactContractBytecode {
     fn from(c: Contract) -> Self {
         let (bytecode, deployed_bytecode) = if let Some(evm) = c.evm {
-            let (maybe_bcode, maybe_runtime) = match (evm.bytecode, evm.deployed_bytecode) {
-                (Some(bcode), Some(dbcode)) => (Some(bcode.into()), Some(dbcode.into())),
-                (None, Some(dbcode)) => (None, Some(dbcode.into())),
-                (Some(bcode), None) => (Some(bcode.into()), None),
-                (None, None) => (None, None),
-            };
-            (maybe_bcode, maybe_runtime)
+            let evm = evm.into_compact();
+            (evm.bytecode, evm.deployed_bytecode)
         } else {
             (None, None)
         };
 
-        Self { abi: c.abi, bytecode, deployed_bytecode }
+        Self { abi: c.abi.map(Into::into), bytecode, deployed_bytecode }
     }
 }
 
@@ -1284,7 +1342,7 @@ impl<'a> From<&'a Contract> for CompactContractRef<'a> {
             (None, None)
         };
 
-        Self { abi: c.abi.as_ref(), bin, bin_runtime }
+        Self { abi: c.abi.as_ref().map(|abi| &abi.abi), bin, bin_runtime }
     }
 }
 
@@ -1328,6 +1386,55 @@ pub struct Evm {
     pub bytecode: Option<Bytecode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deployed_bytecode: Option<DeployedBytecode>,
+    /// The list of function hashes
+    #[serde(default, skip_serializing_if = "::std::collections::BTreeMap::is_empty")]
+    pub method_identifiers: BTreeMap<String, String>,
+    /// Function gas estimates
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gas_estimates: Option<GasEstimates>,
+}
+
+impl Evm {
+    /// Crate internal helper do transform the underlying bytecode artifacts into a more convenient
+    /// structure
+    pub(crate) fn into_compact(self) -> CompactEvm {
+        let Evm {
+            assembly,
+            legacy_assembly,
+            bytecode,
+            deployed_bytecode,
+            method_identifiers,
+            gas_estimates,
+        } = self;
+
+        let (bytecode, deployed_bytecode) = match (bytecode, deployed_bytecode) {
+            (Some(bcode), Some(dbcode)) => (Some(bcode.into()), Some(dbcode.into())),
+            (None, Some(dbcode)) => (None, Some(dbcode.into())),
+            (Some(bcode), None) => (Some(bcode.into()), None),
+            (None, None) => (None, None),
+        };
+
+        CompactEvm {
+            assembly,
+            legacy_assembly,
+            bytecode,
+            deployed_bytecode,
+            method_identifiers,
+            gas_estimates,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CompactEvm {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assembly: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_assembly: Option<serde_json::Value>,
+    pub bytecode: Option<CompactBytecode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployed_bytecode: Option<CompactDeployedBytecode>,
     /// The list of function hashes
     #[serde(default, skip_serializing_if = "::std::collections::BTreeMap::is_empty")]
     pub method_identifiers: BTreeMap<String, String>,
@@ -1527,6 +1634,7 @@ pub enum BytecodeObject {
     #[serde(deserialize_with = "serde_helpers::deserialize_bytes")]
     Bytecode(Bytes),
     /// Bytecode as hex string that's not fully linked yet and contains library placeholders
+    #[serde(with = "serde_helpers::string_bytes")]
     Unlinked(String),
 }
 
@@ -1545,6 +1653,13 @@ impl BytecodeObject {
         match self {
             BytecodeObject::Bytecode(bytes) => Some(bytes),
             BytecodeObject::Unlinked(_) => None,
+        }
+    }
+    /// Returns a reference to the underlying `String` if the object is unlinked
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            BytecodeObject::Bytecode(_) => None,
+            BytecodeObject::Unlinked(s) => Some(s.as_str()),
         }
     }
 
@@ -1650,10 +1765,10 @@ impl BytecodeObject {
     }
 }
 
-// Returns a not deployable bytecode by default as "0x"
+// Returns a not deployable bytecode by default as empty
 impl Default for BytecodeObject {
     fn default() -> Self {
-        BytecodeObject::Unlinked("0x".to_string())
+        BytecodeObject::Unlinked("".to_string())
     }
 }
 

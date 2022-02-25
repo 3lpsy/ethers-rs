@@ -11,7 +11,8 @@ use ethers_solc::{
     cache::{SolFilesCache, SOLIDITY_FILES_CACHE_FILENAME},
     project_util::*,
     remappings::Remapping,
-    Graph, MinimalCombinedArtifacts, Project, ProjectCompileOutput, ProjectPathsConfig,
+    ConfigurableArtifacts, ExtraOutputValues, Graph, Project, ProjectCompileOutput,
+    ProjectPathsConfig,
 };
 use pretty_assertions::assert_eq;
 
@@ -23,12 +24,27 @@ fn init_tracing() {
 }
 
 #[test]
+fn can_get_versioned_linkrefs() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-data/test-versioned-linkrefs");
+    let paths = ProjectPathsConfig::builder()
+        .sources(root.join("src"))
+        .lib(root.join("lib"))
+        .build()
+        .unwrap();
+
+    let project = Project::builder().paths(paths).ephemeral().no_artifacts().build().unwrap();
+
+    let compiled = project.compile().unwrap();
+    assert!(!compiled.has_compiler_errors());
+}
+
+#[test]
 fn can_compile_hardhat_sample() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-data/hardhat-sample");
     let paths = ProjectPathsConfig::builder()
         .sources(root.join("contracts"))
         .lib(root.join("node_modules"));
-    let project = TempProject::<MinimalCombinedArtifacts>::new(paths).unwrap();
+    let project = TempProject::<ConfigurableArtifacts>::new(paths).unwrap();
 
     let compiled = project.compile().unwrap();
     assert!(compiled.find("Greeter").is_some());
@@ -53,7 +69,7 @@ fn can_compile_hardhat_sample() {
 fn can_compile_dapp_sample() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-data/dapp-sample");
     let paths = ProjectPathsConfig::builder().sources(root.join("src")).lib(root.join("lib"));
-    let project = TempProject::<MinimalCombinedArtifacts>::new(paths).unwrap();
+    let project = TempProject::<ConfigurableArtifacts>::new(paths).unwrap();
 
     let compiled = project.compile().unwrap();
     assert!(compiled.find("Dapp").is_some());
@@ -77,8 +93,32 @@ fn can_compile_dapp_sample() {
 }
 
 #[test]
+fn can_compile_configured() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-data/dapp-sample");
+    let paths = ProjectPathsConfig::builder().sources(root.join("src")).lib(root.join("lib"));
+
+    let handler = ConfigurableArtifacts {
+        additional_values: ExtraOutputValues {
+            metadata: true,
+            ir: true,
+            ir_optimized: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let settings = handler.settings();
+    let project = TempProject::with_artifacts(paths, handler).unwrap().with_settings(settings);
+    let compiled = project.compile().unwrap();
+    let artifact = compiled.find("Dapp").unwrap();
+    assert!(artifact.metadata.is_some());
+    assert!(artifact.ir.is_some());
+    assert!(artifact.ir_optimized.is_some());
+}
+
+#[test]
 fn can_compile_dapp_detect_changes_in_libs() {
-    let mut project = TempProject::<MinimalCombinedArtifacts>::dapptools().unwrap();
+    let mut project = TempProject::<ConfigurableArtifacts>::dapptools().unwrap();
 
     let remapping = project.paths().libraries[0].join("remapping");
     project
@@ -151,8 +191,7 @@ fn can_compile_dapp_detect_changes_in_libs() {
 
 #[test]
 fn can_compile_dapp_detect_changes_in_sources() {
-    init_tracing();
-    let project = TempProject::<MinimalCombinedArtifacts>::dapptools().unwrap();
+    let project = TempProject::<ConfigurableArtifacts>::dapptools().unwrap();
 
     let src = project
         .add_source(
@@ -280,12 +319,12 @@ fn can_compile_dapp_sample_with_cache() {
     assert!(compiled.find("NewContract").is_some());
     assert!(!compiled.is_unchanged());
     assert_eq!(
-        compiled.into_artifacts().map(|(name, _)| name).collect::<HashSet<_>>(),
+        compiled.into_artifacts().map(|(artifact_id, _)| artifact_id.name).collect::<HashSet<_>>(),
         HashSet::from([
-            "Dapp.json:Dapp".to_string(),
-            "DappTest.json:DappTest".to_string(),
-            "DSTest.json:DSTest".to_string(),
-            "NewContract.json:NewContract".to_string(),
+            "Dapp".to_string(),
+            "DappTest".to_string(),
+            "DSTest".to_string(),
+            "NewContract".to_string(),
         ])
     );
 
@@ -293,12 +332,12 @@ fn can_compile_dapp_sample_with_cache() {
     std::fs::copy(cache_testdata_dir.join("Dapp.sol"), root.join("src/Dapp.sol")).unwrap();
     let compiled = project.compile().unwrap();
     assert_eq!(
-        compiled.into_artifacts().map(|(name, _)| name).collect::<HashSet<_>>(),
+        compiled.into_artifacts().map(|(artifact_id, _)| artifact_id.name).collect::<HashSet<_>>(),
         HashSet::from([
-            "DappTest.json:DappTest".to_string(),
-            "NewContract.json:NewContract".to_string(),
-            "DSTest.json:DSTest".to_string(),
-            "Dapp.json:Dapp".to_string(),
+            "DappTest".to_string(),
+            "NewContract".to_string(),
+            "DSTest".to_string(),
+            "Dapp".to_string(),
         ])
     );
 
@@ -330,12 +369,13 @@ fn can_flatten_file() {
         .sources(root.join("src"))
         .lib(root.join("lib1"))
         .lib(root.join("lib2"));
-    let project = TempProject::<MinimalCombinedArtifacts>::new(paths).unwrap();
+    let project = TempProject::<ConfigurableArtifacts>::new(paths).unwrap();
 
     let result = project.flatten(&target);
     assert!(result.is_ok());
 
     let result = result.unwrap();
+    assert!(!result.contains("import"));
     assert!(result.contains("contract Foo"));
     assert!(result.contains("contract Bar"));
 }
@@ -346,7 +386,7 @@ fn can_flatten_file_with_external_lib() {
     let paths = ProjectPathsConfig::builder()
         .sources(root.join("contracts"))
         .lib(root.join("node_modules"));
-    let project = TempProject::<MinimalCombinedArtifacts>::new(paths).unwrap();
+    let project = TempProject::<ConfigurableArtifacts>::new(paths).unwrap();
 
     let target = root.join("contracts").join("Greeter.sol");
 
@@ -354,6 +394,7 @@ fn can_flatten_file_with_external_lib() {
     assert!(result.is_ok());
 
     let result = result.unwrap();
+    assert!(!result.contains("import"));
     assert!(result.contains("library console"));
     assert!(result.contains("contract Greeter"));
 }
@@ -362,7 +403,7 @@ fn can_flatten_file_with_external_lib() {
 fn can_flatten_file_in_dapp_sample() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-data/dapp-sample");
     let paths = ProjectPathsConfig::builder().sources(root.join("src")).lib(root.join("lib"));
-    let project = TempProject::<MinimalCombinedArtifacts>::new(paths).unwrap();
+    let project = TempProject::<ConfigurableArtifacts>::new(paths).unwrap();
 
     let target = root.join("src/Dapp.t.sol");
 
@@ -370,6 +411,7 @@ fn can_flatten_file_in_dapp_sample() {
     assert!(result.is_ok());
 
     let result = result.unwrap();
+    assert!(!result.contains("import"));
     assert!(result.contains("contract DSTest"));
     assert!(result.contains("contract Dapp"));
     assert!(result.contains("contract DappTest"));
@@ -377,9 +419,9 @@ fn can_flatten_file_in_dapp_sample() {
 
 #[test]
 fn can_flatten_file_with_duplicates() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-data/flatten-sample");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-data/test-flatten-duplicates");
     let paths = ProjectPathsConfig::builder().sources(root.join("contracts"));
-    let project = TempProject::<MinimalCombinedArtifacts>::new(paths).unwrap();
+    let project = TempProject::<ConfigurableArtifacts>::new(paths).unwrap();
 
     let target = root.join("contracts/FooBar.sol");
 
@@ -387,15 +429,49 @@ fn can_flatten_file_with_duplicates() {
     assert!(result.is_ok());
 
     let result = result.unwrap();
-    assert_eq!(result.matches("contract Foo {").count(), 1);
-    assert_eq!(result.matches("contract Bar {").count(), 1);
-    assert_eq!(result.matches("contract FooBar {").count(), 1);
-    assert_eq!(result.matches(';').count(), 1);
+    assert_eq!(
+        result,
+        r#"//SPDX-License-Identifier: UNLICENSED
+pragma solidity >=0.6.0;
+
+contract Bar {}
+contract Foo {}
+
+contract FooBar {}
+"#
+    );
+}
+
+#[test]
+fn can_flatten_on_solang_failure() {
+    let root =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-data/test-flatten-solang-failure");
+    let paths = ProjectPathsConfig::builder().sources(&root.join("contracts"));
+    let project = TempProject::<ConfigurableArtifacts>::new(paths).unwrap();
+
+    let target = root.join("contracts/Contract.sol");
+
+    let result = project.flatten(&target);
+    assert!(result.is_ok());
+
+    let result = result.unwrap();
+    assert_eq!(
+        result,
+        r#"// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.10;
+
+library Lib {}
+// Intentionally erroneous code
+contract Contract {
+    failure();
+}
+"#
+    );
 }
 
 #[test]
 fn can_detect_type_error() {
-    let project = TempProject::<MinimalCombinedArtifacts>::dapptools().unwrap();
+    let project = TempProject::<ConfigurableArtifacts>::dapptools().unwrap();
 
     project
         .add_source(
@@ -414,4 +490,75 @@ fn can_detect_type_error() {
 
     let compiled = project.compile().unwrap();
     assert!(compiled.has_compiler_errors());
+}
+
+#[test]
+fn can_compile_single_files() {
+    let tmp = TempProject::dapptools().unwrap();
+
+    let f = tmp
+        .add_contract(
+            "examples/Foo",
+            r#"
+    pragma solidity ^0.8.10;
+
+    contract Foo {}
+   "#,
+        )
+        .unwrap();
+
+    let compiled = tmp.project().compile_file(f.clone()).unwrap();
+    assert!(!compiled.has_compiler_errors());
+    assert!(compiled.find("Foo").is_some());
+
+    let bar = tmp
+        .add_contract(
+            "examples/Bar",
+            r#"
+    pragma solidity ^0.8.10;
+
+    contract Bar {}
+   "#,
+        )
+        .unwrap();
+
+    let compiled = tmp.project().compile_files(vec![f, bar]).unwrap();
+    assert!(!compiled.has_compiler_errors());
+    assert!(compiled.find("Foo").is_some());
+    assert!(compiled.find("Bar").is_some());
+}
+
+#[test]
+fn consistent_bytecode() {
+    let tmp = TempProject::dapptools().unwrap();
+
+    tmp.add_source(
+        "LinkTest",
+        r#"
+// SPDX-License-Identifier: MIT
+library LibTest {
+    function foobar(uint256 a) public view returns (uint256) {
+    	return a * 100;
+    }
+}
+contract LinkTest {
+    function foo() public returns (uint256) {
+        return LibTest.foobar(1);
+    }
+}
+"#,
+    )
+    .unwrap();
+
+    let compiled = tmp.compile().unwrap();
+    assert!(!compiled.has_compiler_errors());
+
+    let contract = compiled.find("LinkTest").unwrap();
+    let bytecode = &contract.bytecode.as_ref().unwrap().object;
+    assert!(bytecode.is_unlinked());
+    let s = bytecode.as_str().unwrap();
+    assert!(!s.starts_with("0x"));
+
+    let s = serde_json::to_string(&bytecode).unwrap();
+    assert_eq!(bytecode.clone(), serde_json::from_str(&s).unwrap());
 }

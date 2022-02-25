@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use ethers_core::abi::{Abi, Address};
 
-use crate::{Client, Response, Result};
+use crate::{Client, EtherscanError, Response, Result};
 
 /// Arguments for verifying contracts
 #[derive(Debug, Clone, Serialize)]
@@ -26,7 +26,8 @@ pub struct VerifyContract {
     optimization_used: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runs: Option<String>,
-    #[serde(rename = "constructorArguments", skip_serializing_if = "Option::is_none")]
+    /// NOTE: there is a typo in the etherscan API `constructorArguements`
+    #[serde(rename = "constructorArguements", skip_serializing_if = "Option::is_none")]
     pub constructor_arguments: Option<String>,
     #[serde(rename = "evmversion")]
     pub evm_version: Option<String>,
@@ -235,6 +236,9 @@ impl Client {
     pub async fn contract_abi(&self, address: Address) -> Result<Abi> {
         let query = self.create_query("contract", "getabi", HashMap::from([("address", address)]));
         let resp: Response<String> = self.get_json(&query).await?;
+        if resp.result.starts_with("Contract source code not verified") {
+            return Err(EtherscanError::ContractCodeNotVerified(address))
+        }
         Ok(serde_json::from_str(&resp.result)?)
     }
 
@@ -267,7 +271,7 @@ mod tests {
     use serial_test::serial;
 
     use ethers_core::types::Chain;
-    use ethers_solc::{MinimalCombinedArtifacts, Project, ProjectPathsConfig};
+    use ethers_solc::{Project, ProjectPathsConfig};
 
     use crate::{contract::VerifyContract, tests::run_at_least_duration, Client};
 
@@ -310,7 +314,7 @@ mod tests {
                 .sources(&root)
                 .build()
                 .expect("failed to resolve project paths");
-            let project = Project::<MinimalCombinedArtifacts>::builder()
+            let project = Project::builder()
                 .paths(paths)
                 .build()
                 .expect("failed to build the project");
@@ -329,7 +333,7 @@ mod tests {
                     .optimization(true)
                     .runs(200);
             let resp = client.submit_contract_verification(&contract).await.expect("failed to send the request");
-            assert_ne!(resp.result, "Error!");
+            assert_ne!(resp.result, "Error!"); // `Error!` result means that request was malformatted
         })
         .await
     }

@@ -7,6 +7,7 @@ use crate::{
     utils, Source, Sources,
 };
 
+use crate::artifacts::output_selection::ContractOutputSelection;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Formatter},
@@ -277,8 +278,11 @@ impl ProjectPathsConfig {
 
         for import in imports.iter() {
             let import_path = self.resolve_import(target_dir, import.data())?;
-            let import_content = self.flatten_node(&import_path, graph, imported, true, true)?;
-            let import_content = import_content.trim().as_bytes().to_owned();
+            let import_content = self
+                .flatten_node(&import_path, graph, imported, true, true)?
+                .trim()
+                .as_bytes()
+                .to_owned();
             let import_content_len = import_content.len() as isize;
             let (start, end) = import.loc_by_offset(offset);
             content.splice(start..end, import_content);
@@ -465,9 +469,18 @@ impl SolcConfig {
     }
 }
 
+impl From<SolcConfig> for Settings {
+    fn from(config: SolcConfig) -> Self {
+        config.settings
+    }
+}
+
 #[derive(Default)]
 pub struct SolcConfigBuilder {
     settings: Option<Settings>,
+
+    /// additionally selected outputs that should be included in the `Contract` that `solc´ creates
+    output_selection: Vec<ContractOutputSelection>,
 }
 
 impl SolcConfigBuilder {
@@ -476,12 +489,34 @@ impl SolcConfigBuilder {
         self
     }
 
+    /// Adds another `ContractOutputSelection` to the set
+    #[must_use]
+    pub fn additional_output(mut self, output: impl Into<ContractOutputSelection>) -> Self {
+        self.output_selection.push(output.into());
+        self
+    }
+
+    /// Adds multiple `ContractOutputSelection` to the set
+    #[must_use]
+    pub fn additional_outputs<I, S>(mut self, outputs: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<ContractOutputSelection>,
+    {
+        for out in outputs {
+            self = self.additional_output(out);
+        }
+        self
+    }
+
     /// Creates the solc config
     ///
     /// If no solc version is configured then it will be determined by calling `solc --version`.
     pub fn build(self) -> SolcConfig {
-        let Self { settings } = self;
-        SolcConfig { settings: settings.unwrap_or_default() }
+        let Self { settings, output_selection } = self;
+        let mut settings = settings.unwrap_or_default();
+        settings.push_all(output_selection);
+        SolcConfig { settings }
     }
 }
 

@@ -79,7 +79,8 @@ pub static RELEASES: once_cell::sync::Lazy<(svm::Releases, Vec<Version>, bool)> 
 
 /// A `Solc` version is either installed (available locally) or can be downloaded, from the remote
 /// endpoint
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum SolcVersion {
     Installed(Version),
     Remote(Version),
@@ -728,7 +729,7 @@ mod tests {
             // update this test whenever there's a new sol
             // version. that's ok! good reminder to check the
             // patch notes.
-            (">=0.5.0", "0.8.11"),
+            (">=0.5.0", "0.8.12"),
             // range
             (">=0.4.0 <0.5.0", "0.4.26"),
         ]

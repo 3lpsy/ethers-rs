@@ -4,6 +4,10 @@
 
 ### Unreleased
 
+- Add FTM Mainet and testnet to parse method "try_from" from Chain.rs and add cronos mainet and testnet to "from_str"
+- Add FTM mainnet and testnet Multicall addresses [927](https://github.com/gakonst/ethers-rs/pull/927)
+- Add Cronos mainnet beta and testnet to the list of known chains
+  [926](https://github.com/gakonst/ethers-rs/pull/926)
 - `Chain::to_string` will return the same chain name as `Chain::from_str`
 - Add `eth_syncing` [848](https://github.com/gakonst/ethers-rs/pull/848)
 - Fix overflow and possible divide-by-zero in `estimate_priority_fee`
@@ -35,6 +39,8 @@
   so that the receipt can be returned to the called when deploying
   a contract [#865](https://github.com/gakonst/ethers-rs/pull/865)
 - Add Arbitrum mainnet and testnet to the list of known chains
+- Add ENS avatar and TXT records resolution
+  [#889](https://github.com/gakonst/ethers-rs/pull/889)
 - Add a getter to `ProjectCompileOutput` that returns a mapping of compiler
   versions to a vector of name + contract struct tuples
   [#908](https://github.com/gakonst/ethers-rs/pull/908)
@@ -52,6 +58,10 @@
 
 ### Unreleased
 
+- Wrap `ethabi::Contract` into new type `LosslessAbi` and `abi: Option<Abi>` with `abi: Option<LosslessAbi>` in `ConfigurableContractArtifact`
+  [#952](https://github.com/gakonst/ethers-rs/pull/952)
+- Let `Project` take ownership of `ArtifactOutput` and change trait interface
+  [#907](https://github.com/gakonst/ethers-rs/pull/907)
 - Total revamp of the `Project::compile` pipeline
   [#802](https://github.com/gakonst/ethers-rs/pull/802)
   - Support multiple versions of compiled contracts

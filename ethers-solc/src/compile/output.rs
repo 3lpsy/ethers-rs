@@ -1,9 +1,11 @@
 //! The output of a compiled project
 
 use crate::{
-    artifacts::{CompactContractRef, Contract, Error, SourceFile, SourceFiles},
+    artifacts::{
+        CompactContractBytecode, CompactContractRef, Contract, Error, SourceFile, SourceFiles,
+    },
     contracts::{VersionedContract, VersionedContracts},
-    ArtifactOutput, Artifacts, CompilerOutput,
+    ArtifactId, ArtifactOutput, Artifacts, CompilerOutput, ConfigurableArtifacts,
 };
 use semver::Version;
 use std::{collections::BTreeMap, fmt, path::Path};
@@ -11,7 +13,7 @@ use std::{collections::BTreeMap, fmt, path::Path};
 /// Contains a mixture of already compiled/cached artifacts and the input set of sources that still
 /// need to be compiled.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct ProjectCompileOutput<T: ArtifactOutput> {
+pub struct ProjectCompileOutput<T: ArtifactOutput = ConfigurableArtifacts> {
     /// contains the aggregated `CompilerOutput`
     ///
     /// See [`CompilerSources::compile`]
@@ -33,13 +35,13 @@ impl<T: ArtifactOutput> ProjectCompileOutput<T> {
     ///
     /// ```no_run
     /// use std::collections::btree_map::BTreeMap;
-    /// use ethers_solc::artifacts::CompactContractBytecode;
-    /// use ethers_solc::Project;
+    /// use ethers_solc::ConfigurableContractArtifact;
+    /// use ethers_solc::{ArtifactId, Project};
     ///
     /// let project = Project::builder().build().unwrap();
-    /// let contracts: BTreeMap<String, CompactContractBytecode> = project.compile().unwrap().into_artifacts().collect();
+    /// let contracts: BTreeMap<ArtifactId, ConfigurableContractArtifact> = project.compile().unwrap().into_artifacts().collect();
     /// ```
-    pub fn into_artifacts(self) -> impl Iterator<Item = (String, T::Artifact)> {
+    pub fn into_artifacts(self) -> impl Iterator<Item = (ArtifactId, T::Artifact)> {
         let Self { cached_artifacts, compiled_artifacts, .. } = self;
         cached_artifacts.into_artifacts::<T>().chain(compiled_artifacts.into_artifacts::<T>())
     }
@@ -53,11 +55,10 @@ impl<T: ArtifactOutput> ProjectCompileOutput<T> {
     ///
     /// ```no_run
     /// use std::collections::btree_map::BTreeMap;
-    /// use ethers_solc::artifacts::CompactContractBytecode;
-    /// use ethers_solc::Project;
+    /// use ethers_solc::{ConfigurableContractArtifact, Project};
     ///
     /// let project = Project::builder().build().unwrap();
-    /// let contracts: Vec<(String, String, CompactContractBytecode)> = project.compile().unwrap().into_artifacts_with_files().collect();
+    /// let contracts: Vec<(String, String, ConfigurableContractArtifact)> = project.compile().unwrap().into_artifacts_with_files().collect();
     /// ```
     ///
     /// **NOTE** the `file` will be returned as is, see also [`Self::with_stripped_file_prefixes()`]
@@ -170,6 +171,28 @@ where
             return artifact
         }
         self.cached_artifacts.find(contract_name)
+    }
+}
+
+impl ProjectCompileOutput<ConfigurableArtifacts> {
+    /// A helper functions that extracts the underlying [`CompactContractBytecode`] from the
+    /// [`ConfigurableContractArtifact`]
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use std::collections::btree_map::BTreeMap;
+    /// use ethers_solc::artifacts::CompactContractBytecode;
+    /// use ethers_solc::{ArtifactId, Project};
+    ///
+    /// let project = Project::builder().build().unwrap();
+    /// let contracts: BTreeMap<ArtifactId, CompactContractBytecode> = project.compile().unwrap().into_contract_bytecodes().collect();
+    /// ```
+    pub fn into_contract_bytecodes(
+        self,
+    ) -> impl Iterator<Item = (ArtifactId, CompactContractBytecode)> {
+        self.into_artifacts()
+            .map(|(artifact_id, artifact)| (artifact_id, artifact.into_contract_bytecode()))
     }
 }
 
