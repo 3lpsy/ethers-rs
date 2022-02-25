@@ -420,6 +420,14 @@ pub trait Middleware: Sync + Send + Debug {
         self.inner().get_logs(filter).await.map_err(FromErr::from)
     }
 
+    async fn get_logs_pages(
+        &self,
+        filter: &Filter,
+        block_range: u64,
+    ) -> Box<dyn Stream<Item = Result<Vec<Log>, Self::Error>>> {
+        self.inner().get_logs_pages(filter).await.map_err(FromErr::from)
+    }
+
     async fn new_filter(&self, filter: FilterKind<'_>) -> Result<U256, Self::Error> {
         self.inner().new_filter(filter).await.map_err(FromErr::from)
     }

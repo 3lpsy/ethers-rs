@@ -2,7 +2,7 @@
 
 use crate::{JsonRpcClient, Middleware, PinBoxFut, Provider, ProviderError};
 
-use ethers_core::types::{Transaction, TxHash, U256};
+use ethers_core::types::{Filter, Log, Transaction, TxHash, U256};
 
 use futures_core::{stream::Stream, Future};
 use futures_util::{stream, stream::FuturesUnordered, FutureExt, StreamExt};
@@ -222,7 +222,7 @@ where
             if let Some(tx) = this.buffered.pop_front() {
                 this.push_tx(tx);
             } else {
-                break
+                break;
             }
         }
 
@@ -238,7 +238,7 @@ where
                 }
                 Poll::Ready(None) => {
                     stream_done = true;
-                    break
+                    break;
                 }
                 _ => break,
             }
@@ -246,15 +246,62 @@ where
 
         // poll running futures
         if let tx @ Poll::Ready(Some(_)) = this.pending.poll_next_unpin(cx) {
-            return tx
+            return tx;
         }
 
         if stream_done && this.pending.is_empty() {
             // all done
-            return Poll::Ready(None)
+            return Poll::Ready(None);
         }
 
         Poll::Pending
+    }
+}
+
+// TODO: should this be in this module?
+pub enum EventPageStream<M> {
+    Builder(M, Filter, u64),
+    Pagination(EventPaginator<M>),
+    OneShot(M, Filter, u64),
+    Done,
+}
+
+impl<M: Middleware> EventPageStream<M> {
+    // TODO: should this be M::Error?
+    async fn next(mut self) -> Result<Option<(Vec<Log>, Self)>, M::Error> {
+        loop {
+            let (logs, next) = match self {
+                // One first round, yield a OneShot or Paging type
+                EventPageStream::Builder(provider, filter, block_page_size) => {
+                    unimplemented!();
+                }
+                // If actually paginating, yield the next page and queue next paginator
+                EventPageStream::Pagination(mut paginator) => {
+                    unimplemented!();
+                }
+                // If not paginating, just yield the query and mark done
+                EventPageStream::OneShot(provider, filter, block_page_size) => {
+                    unimplemented!();
+                }
+                EventPageStream::Done => return Ok(None), // used to yield OneShot and finish
+            };
+            unimplemented!();
+            // yield logs and next
+            return Ok(Some((logs, next)));
+        }
+    }
+}
+
+pub struct EventPaginator<M> {
+    provider: M,
+    filter: Filter,
+    block_page_size: u64,
+    block_cursor: u64,
+    query_end_block: u64,
+}
+impl<M: Middleware> EventPaginator<M> {
+    async fn next_page(&mut self) -> Result<Option<Vec<Log>>, M::Error> {
+        unimplemented!()
     }
 }
 
@@ -319,7 +366,7 @@ mod tests {
                         sent.iter().map(|tx| tx.transaction_hash).collect::<HashSet<_>>();
                     assert_eq!(sent_txs, watch_received.iter().map(|tx| tx.hash).collect());
                     assert_eq!(sent_txs, sub_received.iter().map(|tx| tx.hash).collect());
-                    break
+                    break;
                 }
             }
         }

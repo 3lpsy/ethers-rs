@@ -1,7 +1,7 @@
 use crate::{
     ens, erc, maybe,
     pubsub::{PubsubClient, SubscriptionStream},
-    stream::{FilterWatcher, DEFAULT_POLL_INTERVAL},
+    stream::{EventPageStream, FilterWatcher, DEFAULT_POLL_INTERVAL},
     FromErr, Http as HttpProvider, JsonRpcClient, JsonRpcClientWrapper, MockProvider,
     PendingTransaction, QuorumProvider, SyncingStatus,
 };
@@ -27,7 +27,8 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
 use url::{ParseError, Url};
 
-use futures_util::{lock::Mutex, try_join};
+use futures_core::stream::Stream;
+use futures_util::{lock::Mutex, stream::try_unfold, try_join};
 use std::{convert::TryFrom, fmt::Debug, str::FromStr, sync::Arc, time::Duration};
 use tracing::trace;
 use tracing_futures::Instrument;
@@ -633,6 +634,19 @@ impl<P: JsonRpcClient> Middleware for Provider<P> {
         self.request("eth_getLogs", [filter]).await
     }
 
+    // TODO: how to void using box?
+    async fn get_logs_pages(
+        &self,
+        filter: &Filter,
+        block_page_size: u64, // stand in for page_size
+    ) -> Box<dyn Stream<Item = Result<Vec<Log>, Self::Error>>> {
+        // futures_util::stream::try_unfold
+        Box::new(try_unfold(
+            EventPageStream::Builder(self, filter, block_page_size),
+            EventPageStream::next,
+        ))
+    }
+
     /// Streams matching filter logs
     async fn watch<'a>(
         &'a self,
@@ -829,7 +843,7 @@ impl<P: JsonRpcClient> Middleware for Provider<P> {
                         };
                         let data = self.call(&tx.into(), None).await?;
                         if decode_bytes::<Address>(ParamType::Address, data) != owner {
-                            return Err(ProviderError::CustomError("Incorrect owner.".to_string()))
+                            return Err(ProviderError::CustomError("Incorrect owner.".to_string()));
                         }
                     }
                     erc::ERCNFTType::ERC1155 => {
@@ -849,7 +863,9 @@ impl<P: JsonRpcClient> Middleware for Provider<P> {
                         };
                         let data = self.call(&tx.into(), None).await?;
                         if decode_bytes::<u64>(ParamType::Uint(64), data) == 0 {
-                            return Err(ProviderError::CustomError("Incorrect balance.".to_string()))
+                            return Err(ProviderError::CustomError(
+                                "Incorrect balance.".to_string(),
+                            ));
                         }
                     }
                 }
@@ -1141,12 +1157,12 @@ impl<P: JsonRpcClient> Provider<P> {
 
         // otherwise, decode_bytes panics
         if data.0.is_empty() {
-            return Err(ProviderError::EnsError(ens_name.to_owned()))
+            return Err(ProviderError::EnsError(ens_name.to_owned()));
         }
 
         let resolver_address: Address = decode_bytes(ParamType::Address, data);
         if resolver_address == Address::zero() {
-            return Err(ProviderError::EnsError(ens_name.to_owned()))
+            return Err(ProviderError::EnsError(ens_name.to_owned()));
         }
 
         // resolve
