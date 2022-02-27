@@ -324,6 +324,9 @@ impl<M: Middleware> EventPageStream<M> {
                 // One first round, yield a OneShot or Paging type
                 EventPageStream::Builder(provider, paginator) => {
                     self = EventPageStream::build(provider, &paginator).await?;
+                    continue
+                },
+                EventPageStream::FirstPage(mut paginator) {
                     // yield logs from page set in builder
                     let logs = match paginator.get_page().await? {
                         Some(logs) => logs,
@@ -331,7 +334,7 @@ impl<M: Middleware> EventPageStream<M> {
                     };
                     // return with paginator at current page
                     (logs, EventPageStream::Pagination(paginator))
-                }
+                },
                 // If actually paginating, yield the next page and queue next paginator
                 EventPageStream::Pagination(mut paginator) => {
                     // compute next page, set as current, get for that page
@@ -398,7 +401,7 @@ impl<M: Middleware> EventPageStream<M> {
             (Some(from_number), Some(to_number)) => {
                 // build first page (set on paginator) and return
                 let paginator = EventPage::build_first_page(block_page_size);
-                EventPageStream::Pagination(paginator)
+                EventPageStream::FirstPage(paginator)
             }
             _ => EventPageStream::OneShot(provider, filter.clone()),
         };
