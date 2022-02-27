@@ -2,7 +2,7 @@
 
 use crate::{JsonRpcClient, Middleware, PinBoxFut, Provider, ProviderError};
 
-use ethers_core::types::{Filter, Log, Transaction, TxHash, U256};
+use ethers_core::types::{BlockNumber, Filter, FilterBlockOption, Log, Transaction, TxHash, U256};
 
 use futures_core::{stream::Stream, Future};
 use futures_util::{stream, stream::FuturesUnordered, FutureExt, StreamExt};
@@ -258,50 +258,151 @@ where
     }
 }
 
+pub struct EventPage<M> {
+    pub block_cursor: u64,
+    pub query_end_block: u64,
+    // the last filter used
+    pub current_filter: Filter,
+}
+
+pub struct EventPaginator<M> {
+    pub filter: Filter,
+    pub block_page_size: u64,
+    pub page: Option<EventPage<M>>,
+}
+
+impl<M: Middleware> EventPaginator<M> {
+    pub fn new(filter: Filter, block_page_size: u64) {
+        Self { filter, block_page_size, page: None }
+    }
+    // build current filter, build next filter
+    async fn next_page(
+        &mut self,
+        provider: M,
+        block_page_size: u64,
+    ) -> Result<Option<Vec<Log>>, M::Error> {
+        // query current_filter
+        // make next filter
+        match self.page {
+            None => {
+                // handle first page
+                unimplemented!();
+            }
+            Some(current_page) => {
+                // handle middle page
+                unimplemented!();
+            }
+        }
+    }
+
+    async fn get_page(
+        &mut self,
+        provider: M,
+        block_page_size: u64,
+    ) -> Result<Option<Vec<Log>>, M::Error> {
+        unimplemented!()
+    }
+
+    async fn build_first_page(mut self, block_page_size: u64) -> Result<Self, M::Error> {
+        unimplemented!()
+    }
+}
+
 // TODO: should this be in this module?
 pub enum EventPageStream<M> {
-    Builder(M, Filter, u64),
+    Builder(M, EventPaginator<M>),
     Pagination(EventPaginator<M>),
-    OneShot(M, Filter, u64),
+    OneShot(M, EventPaginator<M>),
     Done,
 }
 
 impl<M: Middleware> EventPageStream<M> {
-    // TODO: should this be M::Error?
+    // TODO: should this be M::Error? is this loop necessary?
     async fn next(mut self) -> Result<Option<(Vec<Log>, Self)>, M::Error> {
         loop {
             let (logs, next) = match self {
                 // One first round, yield a OneShot or Paging type
-                EventPageStream::Builder(provider, filter, block_page_size) => {
-                    unimplemented!();
+                EventPageStream::Builder(provider, paginator) => {
+                    self = EventPageStream::build(provider, &paginator).await?;
+                    // yield logs from page set in builder
+                    let logs = match paginator.get_page().await? {
+                        Some(logs) => logs,
+                        None => return Ok(None),
+                    };
+                    // return with paginator at current page
+                    (logs, EventPageStream::Pagination(paginator))
                 }
                 // If actually paginating, yield the next page and queue next paginator
                 EventPageStream::Pagination(mut paginator) => {
-                    unimplemented!();
+                    // compute next page, set as current, get for that page
+                    let logs = match paginator.next_page(self.block_page_size).await? {
+                        // yield logs
+                        Some(logs) => logs,
+                        // done with pagination
+                        None => return Ok(None),
+                    };
+                    (logs, EventPageStream::Pagination(paginator))
                 }
                 // If not paginating, just yield the query and mark done
-                EventPageStream::OneShot(provider, filter, block_page_size) => {
-                    unimplemented!();
+                EventPageStream::OneShot(provider, filter) => {
+                    let logs = provider.get_logs(filter).await?;
+                    (logs, EventPageStream::Done)
                 }
-                EventPageStream::Done => return Ok(None), // used to yield OneShot and finish
+                // Complements OneShot. OneShot yields, Done finishes
+                EventPageStream::Done => return Ok(None),
             };
-            unimplemented!();
             // yield logs and next
             return Ok(Some((logs, next)));
         }
     }
-}
 
-pub struct EventPaginator<M> {
-    provider: M,
-    filter: Filter,
-    block_page_size: u64,
-    block_cursor: u64,
-    query_end_block: u64,
-}
-impl<M: Middleware> EventPaginator<M> {
-    async fn next_page(&mut self) -> Result<Option<Vec<Log>>, M::Error> {
-        unimplemented!()
+    async fn build(
+        provider: M,
+        filter: &EventPaginator,
+        block_page_size: u64,
+    ) -> Result<Self, M::Error> {
+        // check if filter contains AtBlockHash
+        let (from, to) = match filter.block_option {
+            FilterBlockOption::AtBlockHash(block_hash) => {
+                // we will OneShot out and let the provider handle it (no paging)
+                (None, None)
+            }
+            FilterBlockOption::Range { from_block, to_block } => {
+                let from = match from_block {
+                    BlockNumber::Number(num) => Some(num.as_u64()),
+                    // default to start
+                    BlockNumber::Earliest => Some(0),
+                    // if starting at latest, i guess to could be pending
+                    // just OneShot out and let the provider handle it
+                    BlockNumber::Latest | BlockNumber::Pending => None,
+                };
+                let to = match to_block {
+                    BlockNumber::Number(num) => Some(num.as_u64()),
+                    // find the latest block number
+                    // if it's pending, it may be included by time it pages to it
+                    // however, we want to have a deterministic last block
+                    // TODO: figure out this case
+                    // OPTION: capture that pending was passed and compute if it
+                    // was included when the time comes?
+                    BlockNumber::Latest | BlockNumber::Pending => {
+                        let latest = provider.get_block_number().await?;
+                        Some(latest.as_u64())
+                    }
+                    // we will OneShot out and let provider handle it
+                    BlockNumber::Earliest => None,
+                };
+                (from, to)
+            }
+        };
+        let next = match (from, to) {
+            (Some(from_number), Some(to_number)) => {
+                // build first page (set on paginator) and return
+                let paginator = EventPage::build_first_page(block_page_size);
+                EventPageStream::Pagination(paginator)
+            }
+            _ => EventPageStream::OneShot(provider, filter.clone()),
+        };
+        Ok(next)
     }
 }
 

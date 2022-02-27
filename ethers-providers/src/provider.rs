@@ -1,7 +1,7 @@
 use crate::{
     ens, erc, maybe,
     pubsub::{PubsubClient, SubscriptionStream},
-    stream::{EventPageStream, FilterWatcher, DEFAULT_POLL_INTERVAL},
+    stream::{EventPageFilter, EventPageStream, FilterWatcher, DEFAULT_POLL_INTERVAL},
     FromErr, Http as HttpProvider, JsonRpcClient, JsonRpcClientWrapper, MockProvider,
     PendingTransaction, QuorumProvider, SyncingStatus,
 };
@@ -634,17 +634,13 @@ impl<P: JsonRpcClient> Middleware for Provider<P> {
         self.request("eth_getLogs", [filter]).await
     }
 
-    // TODO: how to void using box?
+    // TODO: how to void using box? can't use impl
     async fn get_logs_pages(
         &self,
-        filter: &Filter,
-        block_page_size: u64, // stand in for page_size
+        filter: &EventPageFilter,
     ) -> Box<dyn Stream<Item = Result<Vec<Log>, Self::Error>>> {
         // futures_util::stream::try_unfold
-        Box::new(try_unfold(
-            EventPageStream::Builder(self, filter, block_page_size),
-            EventPageStream::next,
-        ))
+        Box::new(try_unfold(EventPageStream::Builder(self, filter), EventPageStream::next))
     }
 
     /// Streams matching filter logs
